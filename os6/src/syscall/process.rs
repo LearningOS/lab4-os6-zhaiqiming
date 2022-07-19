@@ -1,15 +1,14 @@
 //! Process management syscalls
 
-use crate::mm::{translated_refmut, translated_ref, translated_str};
+use crate::mm::{translated_refmut, translated_ref, translated_str, translate_va_to_pa};
 use crate::task::{
-    add_task, current_task, current_user_token, exit_current_and_run_next,
-    suspend_current_and_run_next, TaskStatus,
+    *
 };
 use crate::fs::{open_file, OpenFlags};
 use crate::timer::get_time_us;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use crate::config::MAX_SYSCALL_NUM;
+use crate::config::{MAX_SYSCALL_NUM, PAGE_SIZE};
 use alloc::string::String;
 
 #[repr(C)]
@@ -112,37 +111,58 @@ pub fn sys_waitpid(pid: isize, exit_code_ptr: *mut i32) -> isize {
 // YOUR JOB: 引入虚地址后重写 sys_get_time
 pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
     let _us = get_time_us();
-    // unsafe {
-    //     *ts = TimeVal {
-    //         sec: us / 1_000_000,
-    //         usec: us % 1_000_000,
-    //     };
-    // }
+    let pa_ts = translate_va_to_pa(current_user_token(), (_ts as usize).into()).unwrap().0;
+    unsafe {
+        *(pa_ts as *mut TimeVal) = TimeVal {
+            sec: _us / 1_000_000,
+            usec: _us % 1_000_000,
+        };
+    }
     0
 }
 
 // YOUR JOB: 引入虚地址后重写 sys_task_info
 pub fn sys_task_info(ti: *mut TaskInfo) -> isize {
-    -1
+    let pa_ti = translate_va_to_pa(current_user_token(), (ti as usize).into()).unwrap().0;
+    // unsafe {println!("debug Kernel: info.status {:?}", *(pa_ti as *mut TaskInfo));}
+    crate::task::get_task_info(pa_ti as *mut TaskInfo);
+    // unsafe {println!("debug Kernel: info.status {:?}", *(pa_ti as *mut TaskInfo));}
+    0
+}
+
+pub fn increase_syscall_time(syscall_number: usize){
+    crate::task::increase_syscall_time(syscall_number);
 }
 
 // YOUR JOB: 实现sys_set_priority，为任务添加优先级
 pub fn sys_set_priority(_prio: isize) -> isize {
-    -1
+    if _prio >= 2 {
+        current_task().unwrap().set_priority(_prio)
+    } else {
+        -1
+    }
 }
 
 // YOUR JOB: 扩展内核以实现 sys_mmap 和 sys_munmap
 pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
-    -1
+    crate::task::mmap(_start, _len, _port)
 }
 
 pub fn sys_munmap(_start: usize, _len: usize) -> isize {
-    -1
+    crate::task::munmap(_start, _len)
 }
 
 //
 // YOUR JOB: 实现 sys_spawn 系统调用
 // ALERT: 注意在实现 SPAWN 时不需要复制父进程地址空间，SPAWN != FORK + EXEC 
 pub fn sys_spawn(_path: *const u8) -> isize {
-    -1
+    let path = translated_str(current_user_token(), _path);
+    if let Some(app_inode) = open_file(path.as_str(), OpenFlags::RDONLY) {
+        let new_task = current_task().unwrap().spawn(&app_inode.read_all()[..]);
+        let new_pid = new_task.pid.0;
+        add_task(new_task.clone());
+        new_pid as isize
+    } else {
+        -1
+    }
 }

@@ -8,9 +8,13 @@
 use super::__switch;
 use super::{fetch_task, TaskStatus};
 use super::{TaskContext, TaskControlBlock};
+use crate::mm::{has_mapped, has_unmapped};
+use crate::syscall::TaskInfo;
 use crate::sync::UPSafeCell;
+use crate::timer::get_time_us;
 use crate::trap::TrapContext;
 use alloc::sync::Arc;
+use crate::config::{PAGE_SIZE};
 use lazy_static::*;
 
 /// Processor management structure
@@ -94,6 +98,30 @@ pub fn current_trap_cx() -> &'static mut TrapContext {
         .get_trap_cx()
 }
 
+pub fn get_task_info(ti: *mut TaskInfo) {
+    if let Some(task) = current_task() {
+        let mut inner = task.inner_exclusive_access();
+        unsafe {
+            (*ti).syscall_times = inner.syscall_times;
+            (*ti).status = TaskStatus::Running;
+            (*ti).time = {
+                let us: usize = get_time_us() - inner.start_running_time;
+                let sec = us / 1_000_000;
+                let usec = us % 1_000_000;
+                ((sec & 0xffff) * 1000 + usec / 1000) as usize
+            };
+        }
+    }
+}
+
+pub fn increase_syscall_time(syscall_number: usize){
+    if let Some(task) = current_task() {
+        let mut inner = task.inner_exclusive_access();
+        inner.syscall_times[syscall_number] += 1;
+    }
+    // let mut inner = current_task().unwrap().inner_exclusive_access();
+}
+
 /// Return to idle control flow for new scheduling
 pub fn schedule(switched_task_cx_ptr: *mut TaskContext) {
     let mut processor = PROCESSOR.exclusive_access();
@@ -102,4 +130,33 @@ pub fn schedule(switched_task_cx_ptr: *mut TaskContext) {
     unsafe {
         __switch(switched_task_cx_ptr, idle_task_cx_ptr);
     }
+}
+
+pub fn mmap(start: usize, len: usize, port: usize) -> isize {
+    if start % PAGE_SIZE != 0 || port & !0x7 != 0 || port & 0x7 == 0 {
+        return -1;
+    }
+    if let Some(task) = current_task() {
+        let mut inner = task.inner_exclusive_access();
+        if has_mapped(inner.get_user_token(), start, len) == false {
+            return -1;
+        }
+        inner.memory_set.mmap(start, len, port);
+        // inner.memory_set.insert_framed_area(VirtAddr::from(start), VirtAddr::from(start + len), permission);   
+    }
+    0
+}
+
+pub fn munmap(start: usize, len: usize) -> isize {
+    if start % PAGE_SIZE != 0 {
+        return -1;
+    }
+    if let Some(task) = current_task() {
+        let mut inner = task.inner_exclusive_access();
+        if has_unmapped(inner.get_user_token(), start, len) {
+            return -1;
+        }
+        inner.memory_set.munmap(start, len);
+    }
+    0
 }

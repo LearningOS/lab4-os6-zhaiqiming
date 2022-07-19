@@ -195,7 +195,6 @@ impl Inode {
         0
     }
     pub fn unlink(&self, name: &str) -> isize {
-        let mut fs = self.fs.lock();
         if let Some(id) = self.modify_disk_inode(|root_inode| {
             // assert it is a directory
             assert!(root_inode.is_dir());
@@ -205,25 +204,35 @@ impl Inode {
         } else {
             return -1;
         }
-
+        
         let link_num = self.get_link_num(name);
         if link_num == 1 as usize{
             self.find(name).unwrap().clear();
         } else if link_num < 1 {
             return -1;
         }
-
+        // panic!("link2");
         self.modify_disk_inode(|disk_inode| {
             let file_count = (disk_inode.size as usize) / DIRENT_SZ;
             for i in 0..file_count {
                 let mut dirent = DirEntry::empty();
-                
+                assert_eq!(
+                    disk_inode.read_at(
+                        i * DIRENT_SZ,
+                        dirent.as_bytes_mut(),
+                        &self.block_device,
+                    ),
+                    DIRENT_SZ,
+                );
+                let empty_dirent = DirEntry::empty();
                 if dirent.name() == name {
                     disk_inode.write_at(
                         i * DIRENT_SZ,
-                        dirent.as_bytes(),
+                        empty_dirent.as_bytes(),
                         &self.block_device,
                     );
+                    // panic!("write over!");
+                    break;
                 }
             }
         });

@@ -1,6 +1,6 @@
 //! Implementation of [`PageTableEntry`] and [`PageTable`].
 
-use super::{frame_alloc, FrameTracker, PhysAddr, PhysPageNum, StepByOne, VirtAddr, VirtPageNum};
+use super::{frame_alloc, FrameTracker, PhysAddr, PhysPageNum, StepByOne, VirtAddr, VirtPageNum, VPNRange};
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -202,6 +202,48 @@ pub fn translated_refmut<T>(token: usize, ptr: *mut T) -> &'static mut T {
         .get_mut()
 }
 
+pub fn translate_va_to_pa(token: usize, va: VirtAddr) -> Option<PhysAddr> {
+    let page_table = PageTable::from_token(token);
+    page_table.find_pte(va.clone().floor())
+        .map(|pte| {
+            let aligned_pa: PhysAddr = pte.ppn().into();
+            let offset = va.page_offset();
+            let aligned_pa_usize: usize = aligned_pa.into();
+            (aligned_pa_usize + offset).into()
+        })
+}
+pub fn has_mapped(token: usize, start: usize, len: usize) -> bool {
+    let start_vpn = VirtAddr::from(start).floor();
+    let end_vpn = VirtAddr::from(start + len).ceil();
+    let page_table = PageTable::from_token(token);
+    for vpn in VPNRange::new(start_vpn, end_vpn) {
+        if let Some(x) = page_table.translate(vpn) {
+            if x.is_valid() == true {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+pub fn has_unmapped(token: usize, start: usize, len: usize) -> bool {
+    let start_vpn = VirtAddr::from(start).floor();
+    let end_vpn = VirtAddr::from(start + len).ceil();
+    let page_table = PageTable::from_token(token);
+    for vpn in VPNRange::new(start_vpn, end_vpn) {
+        match page_table.translate(vpn) {
+            Some(x) => {
+                if x.is_valid() == false {
+                    return true;
+                }
+            }
+            None => {
+                return true;
+            }
+        }
+    }
+    false
+}
 /// An abstraction over a buffer passed from user space to kernel space
 pub struct UserBuffer {
     pub buffers: Vec<&'static mut [u8]>,
