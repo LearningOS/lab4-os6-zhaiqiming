@@ -14,6 +14,7 @@ pub fn main() -> i32 {
     let (lname0, lname1, lname2) = ("linkname0\0", "linkname1\0", "linkname2\0");
     let fd = open(fname, OpenFlags::CREATE | OpenFlags::WRONLY) as usize;
     link(fname, lname0);
+    // println!("###1");
     let stat = Stat::new();
     fstat(fd, &stat);
     assert_eq!(stat.nlink, 2);
@@ -23,17 +24,21 @@ pub fn main() -> i32 {
     assert_eq!(stat.nlink, 4);
     write(fd, test_str.as_bytes());
     close(fd);
-
+    // println!("###2");
     unlink(fname);
+    // println!("###2.1");
     let fd = open(lname0, OpenFlags::RDONLY) as usize;
+    // println!("###2.2");
     let stat2 = Stat::new();
     let mut buf = [0u8; 100];
     let read_len = read(fd, &mut buf) as usize;
+    // println!("###2.3");
     assert_eq!(test_str, core::str::from_utf8(&buf[..read_len]).unwrap(),);
     fstat(fd, &stat2);
     assert_eq!(stat2.dev, stat.dev);
     assert_eq!(stat2.ino, stat.ino);
     assert_eq!(stat2.nlink, 3);
+    // println!("###3");
     unlink(lname1);
     unlink(lname2);
     fstat(fd, &stat2);

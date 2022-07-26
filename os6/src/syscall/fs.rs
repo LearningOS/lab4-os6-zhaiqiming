@@ -81,19 +81,8 @@ pub fn sys_close(fd: usize) -> isize {
 
 // YOUR JOB: 扩展 easy-fs 和内核以实现以下三个 syscall
 pub fn sys_fstat(fd: usize, _st: *mut Stat) -> isize {
-    // pub struct Stat {
-    //     /// ID of device containing file
-    //     pub dev: u64,
-    //     /// inode number
-    //     pub ino: u64,
-    //     /// file type and mode
-    //     pub mode: StatMode,
-    //     /// number of hard links
-    //     pub nlink: u32,
-    //     /// unused pad
-    //     pad: [u64; 7],
-    // }
     let task = current_task().unwrap();
+    let token = current_user_token();
     let mut inner = task.inner_exclusive_access();
     if fd >= inner.fd_table.len() {
         return -1;
@@ -101,7 +90,6 @@ pub fn sys_fstat(fd: usize, _st: *mut Stat) -> isize {
     if inner.fd_table[fd].is_none() {
         return -1;
     }
-    let token = current_user_token();
     let mut fstat = translated_refmut(token, _st);
     let temp = inner.fd_table[fd].as_ref().unwrap().clone();
     get_fstat(temp, fstat)

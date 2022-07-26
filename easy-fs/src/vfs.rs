@@ -157,6 +157,145 @@ impl Inode {
         )))
         // release efs lock automatically by compiler
     }
+    pub fn get_inode_number(&self) -> usize {
+        let fs = self.fs.lock();
+        fs.get_inode_id(self.block_id, self.block_offset)
+    }
+    /// link 
+    pub fn link(&self, src_name: &str, dst_name: &str) -> isize {
+        let mut fs = self.fs.lock();
+        let mut new_inode_id: usize = 0;
+        if let Some(id) = self.modify_disk_inode(|root_inode| {
+            // assert it is a directory
+            assert!(root_inode.is_dir());
+            // has the file been created?
+            self.find_inode_id(src_name, root_inode)
+        }) {
+            new_inode_id = id as usize;
+        } else {
+            return -1;
+        }
+        
+        self.modify_disk_inode(|root_inode| {
+            // append file in the dirent
+            let file_count = (root_inode.size as usize) / DIRENT_SZ;
+            let new_size = (file_count + 1) * DIRENT_SZ;
+            // increase size
+            self.increase_size(new_size as u32, root_inode, &mut fs);
+            // write dirent
+            let dirent = DirEntry::new(dst_name, new_inode_id as u32);
+            root_inode.write_at(
+                file_count * DIRENT_SZ,
+                dirent.as_bytes(),
+                &self.block_device,
+            );
+        });
+
+        block_cache_sync_all();
+        0
+    }
+    pub fn unlink(&self, name: &str) -> isize {
+        if let Some(id) = self.modify_disk_inode(|root_inode| {
+            // assert it is a directory
+            assert!(root_inode.is_dir());
+            // has the file been created?
+            self.find_inode_id(name, root_inode)
+        }) {
+        } else {
+            return -1;
+        }
+        
+        let link_num = self.get_link_num(name);
+        if link_num == 1 as usize{
+            self.find(name).unwrap().clear();
+        } else if link_num < 1 {
+            return -1;
+        }
+        // panic!("link2");
+        self.modify_disk_inode(|disk_inode| {
+            let file_count = (disk_inode.size as usize) / DIRENT_SZ;
+            for i in 0..file_count {
+                let mut dirent = DirEntry::empty();
+                assert_eq!(
+                    disk_inode.read_at(
+                        i * DIRENT_SZ,
+                        dirent.as_bytes_mut(),
+                        &self.block_device,
+                    ),
+                    DIRENT_SZ,
+                );
+                let empty_dirent = DirEntry::empty();
+                if dirent.name() == name {
+                    disk_inode.write_at(
+                        i * DIRENT_SZ,
+                        empty_dirent.as_bytes(),
+                        &self.block_device,
+                    );
+                    // panic!("write over!");
+                    break;
+                }
+            }
+        });
+
+        block_cache_sync_all();
+        0
+    }
+
+    ///get link_num     
+    pub fn get_link_num(&self, name: &str) -> usize {
+        let fs = self.fs.lock();
+        let mut num = 0 as usize;
+        let mut inode_id = 0;
+        if let Some(id) = self.modify_disk_inode(|root_inode| {
+            // assert it is a directory
+            assert!(root_inode.is_dir());
+            // has the file been created?
+            self.find_inode_id(name, root_inode)
+        }) {
+            inode_id = id;
+        } else {
+            return 0;
+        }
+        self.read_disk_inode(|disk_inode| {
+            let file_count = (disk_inode.size as usize) / DIRENT_SZ;
+            for i in 0..file_count {
+                let mut dirent = DirEntry::empty();
+                assert_eq!(
+                    disk_inode.read_at(
+                        i * DIRENT_SZ,
+                        dirent.as_bytes_mut(),
+                        &self.block_device,
+                    ),
+                    DIRENT_SZ,
+                );
+                if dirent.inode_number() == inode_id {
+                    num += 1;
+                }
+            }
+            num
+        })
+    }
+    pub fn get_name_by_inode_id(&self, inode_id: usize) -> Option<String> {
+        let fs = self.fs.lock();
+        self.read_disk_inode(|disk_inode| {
+            let file_count = (disk_inode.size as usize) / DIRENT_SZ;
+            for i in 0..file_count {
+                let mut dirent = DirEntry::empty();
+                assert_eq!(
+                    disk_inode.read_at(
+                        i * DIRENT_SZ,
+                        dirent.as_bytes_mut(),
+                        &self.block_device,
+                    ),
+                    DIRENT_SZ,
+                );
+                if dirent.inode_number() == inode_id as u32 {
+                    return Some(dirent.name().into());
+                }
+            }
+            None
+        })
+    }
     /// List inodes under current inode
     pub fn ls(&self) -> Vec<String> {
         let _fs = self.fs.lock();
